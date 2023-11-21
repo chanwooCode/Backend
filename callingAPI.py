@@ -2,36 +2,96 @@ import requests
 import schedule
 import time
 import logging
+import pyrebase
+import json
+from datetime import datetime
+from config import api_key
 
-logging.basicConfig(level=logging.ERROR)
+# Set the base URL for the Football Data API v4
+base_url = "https://api.football-data.org/v4"
+# Set the headers with your API key
+headers = {
+    "X-Auth-Token": api_key,
+}
 
-def fetch_data_from_api():
-    try:
-        url = "https://premier-league-standings1.p.rapidapi.com/"
-        headers = {
-            "X-RapidAPI-Key": "2eb0ad9717msh5a898288a798d61p1803ffjsn8c47cfe397c2",
-            "X-RapidAPI-Host": "premier-league-standings1.p.rapidapi.com",
+# Function to get standings for a specific competition
+def get_standings():
+    url = f"{base_url}/competitions/PL/standings"
+    response = requests.get(url, headers=headers)
+
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print(f"Error getting standings. Status code: {response.status_code}")
+        return None
+
+# Function to get matches for a specific competition
+def get_matches():
+    url = f"{base_url}/competitions/PL/matches"
+    response = requests.get(url, headers=headers)
+
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print(f"Error getting standings. Status code: {response.status_code}")
+        return None
+    
+    
+    
+    
+with open("auth.json") as f:
+    config = json.load(f)
+firebase = pyrebase.initialize_app(config)
+db = firebase.database()
+
+standings_data = get_standings()
+if standings_data:
+    # Extract the standings table from the response
+    standings_table = standings_data['standings'][0]['table']
+    # Create a list to hold the transformed data
+    firebase_data = []
+    # Transform the data to match the TeamTable structure
+    for team_info in standings_table:
+        team_data = {
+            "rank": team_info["position"],
+            "teamName": team_info["team"]["name"],
+            "matchesPlayed": team_info["playedGames"],
+            "wins": team_info["won"],
+            "draws": team_info["draw"],
+            "losses": team_info["lost"],
+            "points": team_info["points"]
         }
+        firebase_data.append(team_data)
+    # Push the transformed data to Firebase
+    db.child("standings").set(firebase_data)
+    print("Data saved to Firebase successfully")
 
-        response = requests.get(url, headers=headers)
+# Fetch matches data
+def get_current_utc_date():
+    now = datetime.utcnow()
+    return now.strftime('%Y-%m-%dT%H:%M:%SZ')
 
-        if response.status_code == 200:
-            return response.text
-        else:
-            logging.error(f"Error during network request. Status code: {response.status_code}")
-            return ""
-    except Exception as e:
-        logging.error("Error during network request", exc_info=True)
-        return ""
+# Fetch matches data
+matches_data = get_matches()
+if matches_data:
+    # Extract the matches data from the response
+    matches = matches_data['matches']
+    # Sort matches by utcDate in ascending order (closest to the current time first)
+    matches_sorted = sorted(matches, key=lambda x: abs((datetime.strptime(x["utcDate"], '%Y-%m-%dT%H:%M:%SZ') - datetime.strptime(get_current_utc_date(), '%Y-%m-%dT%H:%M:%SZ')).total_seconds()))
+    # Create a list to hold the transformed data
+    firebase_matches_data = []
+    # Limit to the top 10 matches
+    for match_info in matches_sorted[:10]:
+        match_data = {
+            # Add fields as needed based on your data model
+            "utcDate": match_info["utcDate"],
+            "homeTeam": match_info["homeTeam"]["name"],
+            "awayTeam": match_info["awayTeam"]["name"],
+            "status": match_info["status"],
+            # Add more fields as needed
+        }
+        firebase_matches_data.append(match_data)
+    # Push the transformed matches data to Firebase
+    db.child("matches").set(firebase_matches_data)
+    print("Top 10 matches data saved to Firebase successfully")
 
-def job():
-    data = fetch_data_from_api()
-    # Process the data as needed
-    print(data)
-
-# Run the job every 30 minutes
-schedule.every(30).minutes.do(job)
-
-while True:
-    schedule.run_pending()
-    time.sleep(1)
